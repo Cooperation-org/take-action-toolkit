@@ -18,9 +18,6 @@
   vars:
     # Override these in inventory.yml or on the command line
     domain: "takeaction.example.org"
-    db_name: "takeaction_wp"
-    db_user: "takeaction"
-    db_password: "{{ vault_db_password | default('CHANGE_ME_BEFORE_DEPLOY') }}"
     wp_admin_user: "admin"
     wp_admin_email: "admin@{{ domain }}"
     wp_admin_password: "{{ vault_wp_admin_password | default('CHANGE_ME_BEFORE_DEPLOY') }}"
@@ -78,32 +75,11 @@
         - { key: "pm.max_spare_servers", value: "6" }
       notify: Restart PHP-FPM
 
-    # ── MariaDB ──────────────────────────────────────────────────
-    - name: Install MariaDB
-      apt:
-        name:
-          - mariadb-server
-          - python3-mysqldb
-        state: present
-
-    - name: Start and enable MariaDB
-      systemd:
-        name: mariadb
-        state: started
-        enabled: true
-
-    - name: Create WordPress database
-      mysql_db:
-        name: "{{ db_name }}"
-        state: present
-
-    - name: Create WordPress database user
-      mysql_user:
-        name: "{{ db_user }}"
-        password: "{{ db_password }}"
-        priv: "{{ db_name }}.*:ALL"
-        host: "localhost"
-        state: present
+    # ── SQLite (no DB server needed) ─────────────────────────────
+    - name: Download SQLite integration plugin
+      get_url:
+        url: https://downloads.wordpress.org/plugin/sqlite-database-integration.zip
+        dest: /tmp/sqlite-database-integration.zip
 
     # ── Caddy ────────────────────────────────────────────────────
     - name: Install Caddy
@@ -137,6 +113,7 @@
 
               @blocked {
                   path /xmlrpc.php
+                  path /wp-content/database/*
               }
               respond @blocked 403
           }
@@ -178,14 +155,37 @@
       args:
         creates: "{{ wp_path }}/wp-login.php"
 
-    - name: Configure WordPress
+    - name: Extract SQLite integration plugin
+      unarchive:
+        src: /tmp/sqlite-database-integration.zip
+        dest: "{{ wp_path }}/wp-content/plugins/"
+        remote_src: true
+        creates: "{{ wp_path }}/wp-content/plugins/sqlite-database-integration"
+
+    - name: Install SQLite db.php drop-in
+      copy:
+        src: "{{ wp_path }}/wp-content/plugins/sqlite-database-integration/db.php"
+        dest: "{{ wp_path }}/wp-content/db.php"
+        remote_src: true
+        force: false
+
+    - name: Create SQLite database directory
+      file:
+        path: "{{ wp_path }}/wp-content/database"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0750"
+
+    - name: Configure WordPress (SQLite)
       command: >
         wp config create
           --path={{ wp_path }}
-          --dbname={{ db_name }}
-          --dbuser={{ db_user }}
-          --dbpass={{ db_password }}
+          --dbname=wordpress
+          --dbuser=wordpress
+          --dbpass=wordpress
           --dbhost=localhost
+          --skip-check
           --extra-php="define('WP_MEMORY_LIMIT', '256M');"
       become_user: www-data
       args:
@@ -208,7 +208,7 @@
     # ── Deploy Plugin & Theme ────────────────────────────────────
     - name: Clone toolkit repo
       git:
-        repo: "https://github.com/gvelez17/take-action-toolkit.git"
+        repo: "https://github.com/Cooperation-org/take-action-toolkit.git"
         dest: "/opt/take-action-toolkit"
         version: main
         force: true
@@ -246,6 +246,12 @@
         owner: www-data
         group: www-data
         recurse: true
+
+    - name: Activate SQLite integration plugin
+      command: wp plugin activate sqlite-database-integration --path={{ wp_path }}
+      become_user: www-data
+      register: sqlite_activate
+      changed_when: "'already active' not in sqlite_activate.stdout"
 
     - name: Activate plugin
       command: wp plugin activate take-action-toolkit --path={{ wp_path }}
