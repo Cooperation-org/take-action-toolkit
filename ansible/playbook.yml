@@ -60,6 +60,7 @@
           - "php{{ php_version }}-gd"
           - "php{{ php_version }}-intl"
           - "php{{ php_version }}-imagick"
+          - "php{{ php_version }}-sqlite3"
         state: present
       notify: Restart PHP-FPM
 
@@ -164,10 +165,10 @@
 
     - name: Install SQLite db.php drop-in
       copy:
-        src: "{{ wp_path }}/wp-content/plugins/sqlite-database-integration/db.php"
+        src: "{{ wp_path }}/wp-content/plugins/sqlite-database-integration/db.copy"
         dest: "{{ wp_path }}/wp-content/db.php"
         remote_src: true
-        force: false
+        force: true
 
     - name: Create SQLite database directory
       file:
@@ -214,7 +215,7 @@
         force: true
 
     - name: Build plugin assets
-      command: npm ci && npm run build
+      command: npm install && npm run build
       args:
         chdir: /opt/take-action-toolkit/plugin
       environment:
